@@ -1,49 +1,36 @@
 # Customer Retention Intelligence Platform
 
-Customer Retention Intelligence Platform is an end-to-end ML service that predicts customer churn risk for subscription businesses and exposes real-time/batch inference APIs.
+Customer Retention Intelligence Platform is an end-to-end ML service that predicts customer churn risk for subscription businesses and exposes real-time and batch inference APIs.
 
-## Overview
-The project includes:
-- Reproducible training pipeline (`scripts/train.py`) with persisted model + metadata.
-- REST API (`FastAPI`) with health/readiness endpoints.
+## What is included
+- Reproducible training pipeline (`scripts/train.py`) with persisted model + metrics metadata.
+- FastAPI service with health and readiness probes.
 - Single and batch prediction endpoints.
-- CI checks for linting and tests.
-- Docker setup for containerized deployment.
-
-## Use cases
-- Trigger retention workflows when users enter `high`/`critical` risk segments.
-- Score customer lists in batch for weekly campaign planning.
-- Integrate real-time scoring into billing, CRM, or support systems.
-
-## Architecture
-1. Data generation/training pipeline builds a scikit-learn model.
-2. Artifacts are persisted to `models/`:
-   - `churn_model.joblib`
-   - `churn_model.metrics.json` (includes model metadata)
-3. API loads artifacts at runtime and serves predictions.
-4. `/health` and `/ready` provide operational status for orchestration.
+- Test suite and lint checks for CI.
+- Dockerfile + Compose support.
+- Committed test dataset under `data/test/` for deterministic local testing.
 
 ## Repository structure
 ```text
 .
-├── .github/workflows/ci.yml
-├── Dockerfile
-├── Makefile
-├── docker-compose.yml
+├── data/
+│   ├── raw/
+│   ├── processed/
+│   └── test/
+│       ├── customers_test.csv
+│       └── batch_prediction_payload.json
+├── models/
 ├── scripts/
 │   └── train.py
 ├── src/customer_retention_intelligence_platform/
 │   ├── api/
-│   │   ├── app.py
-│   │   ├── schemas.py
-│   │   └── service.py
 │   ├── pipeline/
-│   │   ├── data_generation.py
-│   │   └── training.py
 │   └── utils/
-│       ├── config.py
-│       └── logging.py
-└── tests/
+├── tests/
+├── Dockerfile
+├── docker-compose.yml
+├── Makefile
+└── README.md
 ```
 
 ## Prerequisites
@@ -51,61 +38,93 @@ The project includes:
 - `pip`
 - Optional: Docker 24+
 
-## Configuration
-Copy and edit environment settings:
+## Setup
+1. Create and activate virtual environment:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
 
+2. Install dependencies:
+```bash
+pip install -e '.[dev]'
+```
+
+3. Create environment file:
 ```bash
 cp .env.example .env
 ```
 
-Available variables:
+## Configuration
+Environment variables:
 - `APP_ENV`: `dev|staging|prod|test`
 - `LOG_LEVEL`: `DEBUG|INFO|WARNING|ERROR`
-- `MODEL_PATH`: model artifact path
+- `MODEL_PATH`: model artifact path (default expected: `models/churn_model.joblib`)
 - `THRESHOLD`: decision threshold for predicted churn (`0 < threshold < 1`)
 
-## Local development
-1. Create environment and install dependencies:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-```
-
-2. Train the model:
-
+## Quick start
+1. Train a model:
 ```bash
 make train
 ```
 
-Optional training flags:
-
-```bash
-python scripts/train.py --rows 10000 --seed 11 --raw-output data/raw/customers.csv
-```
-
-3. Run API:
-
+2. Start API:
 ```bash
 make serve
 ```
 
-4. Run checks:
-
+3. Check service:
 ```bash
-make lint
+curl -s http://localhost:8000/health
+curl -s http://localhost:8000/ready
+```
+
+4. Run tests:
+```bash
 make test
 ```
+
+## Test dataset
+Two committed fixtures are available:
+- `data/test/customers_test.csv`: 20 labeled rows with full training schema (`churned` included).
+- `data/test/batch_prediction_payload.json`: ready-to-send API payload (`items` only, no `churned`).
+
+### Use the test payload with batch prediction
+1. Start API (`make serve`)
+2. Send fixture payload:
+```bash
+curl -s -X POST http://localhost:8000/predict/batch \
+  -H 'Content-Type: application/json' \
+  -d @data/test/batch_prediction_payload.json
+```
+
+### Use the CSV fixture for manual checks
+```bash
+head -n 5 data/test/customers_test.csv
+```
+
+## Training
+Default training (synthetic data generation + artifact persistence):
+```bash
+make train
+```
+
+Custom training data generation parameters:
+```bash
+python scripts/train.py --rows 10000 --seed 11 --raw-output data/raw/customers_seed11.csv
+```
+
+Artifacts written:
+- Model: `models/churn_model.joblib`
+- Metrics/metadata: `models/churn_model.metrics.json`
 
 ## API reference
 Base URL: `http://localhost:8000`
 
 ### `GET /health`
-Liveness + model artifact visibility.
+Liveness and model visibility.
 
 Example response:
-
 ```json
 {
   "status": "ok",
@@ -116,13 +135,12 @@ Example response:
 ```
 
 ### `GET /ready`
-Readiness probe for orchestration. Returns `503` if model artifact is missing.
+Readiness probe. Returns `503` if model artifact is missing.
 
 ### `POST /predict`
 Single prediction.
 
-Request:
-
+Request example:
 ```json
 {
   "tenure_months": 5,
@@ -135,22 +153,10 @@ Request:
 }
 ```
 
-Response:
-
-```json
-{
-  "churn_probability": 0.8271,
-  "predicted_churn": true,
-  "risk_segment": "critical",
-  "decision_threshold": 0.5
-}
-```
-
 ### `POST /predict/batch`
-Batch prediction for up to 500 records per request.
+Batch prediction for up to 500 records.
 
-Request:
-
+Request shape:
 ```json
 {
   "items": [
@@ -167,33 +173,40 @@ Request:
 }
 ```
 
-## Docker deployment
-Build image:
+## Developer commands
+- `make install`: install editable package + dev dependencies.
+- `make train`: train and persist artifacts.
+- `make serve`: run API with Uvicorn on port `8000`.
+- `make test`: run `pytest -q`.
+- `make lint`: run Ruff lint checks.
+- `make format`: run Ruff autofix.
+- `make docker-build`: build container image.
+- `make docker-run`: run container on `localhost:8000`.
 
+## Docker
+Build image:
 ```bash
 make docker-build
 ```
 
 Run container:
-
 ```bash
 make docker-run
 ```
 
-Or with compose:
-
+Or run with compose:
 ```bash
 docker compose up --build
 ```
 
-## Production recommendations
-- Replace synthetic dataset with warehouse ingestion.
-- Pin dependencies with lock files and enable vulnerability scanning.
-- Add authentication/rate-limiting in front of `/predict` endpoints.
-- Add model monitoring (drift, performance decay) and scheduled retraining.
-- Export metrics/logs to your observability stack.
-
 ## Troubleshooting
 - `503 Model artifact missing`: run `make train` first.
-- Import errors when running scripts: ensure virtual environment is active.
-- Unexpected threshold behavior: verify `THRESHOLD` in `.env`.
+- Import errors in scripts: confirm virtual environment is active.
+- Threshold behavior unexpected: verify `THRESHOLD` in `.env`.
+- API starts but predictions fail: ensure `models/churn_model.joblib` and `models/churn_model.metrics.json` both exist.
+
+## Production recommendations
+- Replace synthetic generation with warehouse/feature-store ingestion.
+- Add auth and rate limiting to prediction endpoints.
+- Add monitoring for drift and retraining triggers.
+- Track online/offline model performance over time.
